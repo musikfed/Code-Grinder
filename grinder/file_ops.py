@@ -7,7 +7,7 @@ import os
 import stat
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from grinder.diff import unified_change
 from grinder.parser import Change, Mode, validate_target
 from grinder.patches import PatchError, apply_patch
 from grinder.validator import Status, ValidationResult, Validator
-from grinder.windows_guard import guard_windows_parents
+from grinder.windows_guard import guard_windows_parents, replace_windows_staged
 
 
 class SafetyError(RuntimeError):
@@ -85,20 +85,25 @@ class FileManager:
     def _parent_fd(self, relative: str, *, create: bool = False) -> Iterator[int | None]:
         """Open each parent by directory descriptor, refusing symlinks on POSIX.
 
-        On Windows, dir_fd/O_NOFOLLOW are unavailable; callers use repeated
-        checks and a portable path fallback, which is not a full OS-level race guarantee.
+        On Windows, pin parent-directory Win32 handles and use root-relative
+        native rename to avoid textual ancestor swaps during replacement.
         """
         parts = relative.split("/")[:-1]
         if os.name == "nt":
             # Keep real Win32 directory handles open (deny SHARE_DELETE) until
             # the caller finishes reading, creating, replacing or removing.
             path = self.root.joinpath(*relative.split("/"))
-            try:
-                with guard_windows_parents(self.root, path, create=create):
+            with ExitStack() as guards:
+                try:
+                    pinned_parent = guards.enter_context(
+                        guard_windows_parents(self.root, path, create=create)
+                    )
                     self.safe_path(relative, internal=relative.startswith(".grinder_tmp/"))
-                    yield None
-            except (OSError, RuntimeError) as exc:
-                raise SafetyError(f"Windows path guard failed: {exc}") from exc
+                except (OSError, RuntimeError) as exc:
+                    raise SafetyError(f"Windows path guard failed: {exc}") from exc
+                # Do not wrap exceptions raised by the caller inside yield:
+                # e.g. FileNotFoundError is a normal result of a new CREATE target.
+                yield pinned_parent
             return
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         fd = os.open(self.root, flags)
@@ -193,7 +198,9 @@ class FileManager:
         with self._parent_fd(source) as src_fd, self._parent_fd(target, create=True) as dst_fd:
             self.safe_path(target)
             if os.name == "nt":
-                os.replace(self.root / source, self.root / target)
+                replace_windows_staged(
+                    self.root / source, target.split("/")[-1], dst_fd,
+                )
             else:
                 os.replace(source.split("/")[-1], target.split("/")[-1],
                            src_dir_fd=src_fd, dst_dir_fd=dst_fd)

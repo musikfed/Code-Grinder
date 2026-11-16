@@ -17,10 +17,10 @@ from pathlib import Path
 
 
 @contextmanager
-def guard_windows_parents(root: Path, target: Path, *, create: bool = False) -> Iterator[None]:
+def guard_windows_parents(root: Path, target: Path, *, create: bool = False) -> Iterator[int | None]:
     """Pin the root and each ancestor using non-reparse Win32 directory handles."""
     if os.name != "nt":
-        yield
+        yield None
         return
 
     import ctypes
@@ -60,6 +60,8 @@ def guard_windows_parents(root: Path, target: Path, *, create: bool = False) -> 
     get_final.restype = wintypes.DWORD
 
     FILE_READ_ATTRIBUTES = 0x80
+    FILE_ADD_FILE = 0x2
+    FILE_TRAVERSE = 0x20
     FILE_SHARE_READ_WRITE = 0x1 | 0x2  # Exclude FILE_SHARE_DELETE to pin ancestors.
     OPEN_EXISTING = 3
     FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
@@ -70,7 +72,8 @@ def guard_windows_parents(root: Path, target: Path, *, create: bool = False) -> 
     def pin(directory: Path) -> tuple[int, str]:
         """Open a directory, rejecting any reparse-point and obtaining its real location."""
         handle = create_file(
-            str(directory), FILE_READ_ATTRIBUTES, FILE_SHARE_READ_WRITE, None,
+            str(directory), FILE_READ_ATTRIBUTES | FILE_ADD_FILE | FILE_TRAVERSE,
+            FILE_SHARE_READ_WRITE, None,
             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             None,
         )
@@ -110,4 +113,65 @@ def guard_windows_parents(root: Path, target: Path, *, create: bool = False) -> 
             stack.callback(close_handle, handle)
             if not (resolved == root_real or resolved.startswith(root_real + "\\")):
                 raise RuntimeError("Directory handle escaped project root")
-        yield
+        yield handle if rel.parts[:-1] else root_handle
+
+
+def replace_windows_staged(source: Path, destination_name: str, destination_parent: int) -> None:
+    """Rename an opened source HANDLE relative to the pinned destination directory.
+
+    Unlike os.replace(path, path), FILE_RENAME_INFO.RootDirectory prevents
+    redirection of the destination through a swapped textual ancestor path.
+    The operation is atomic for the destination leaf on NTFS, not across batches.
+    """
+    if os.name != "nt":
+        raise RuntimeError("Native Windows replacement only works on Windows")
+    if not destination_name or any(c in destination_name for c in ("/", "\\", "\x00")):
+        raise ValueError("Destination must be one simple filename")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FileRenameInfo(ctypes.Structure):
+        """Win32 FILE_RENAME_INFO with a flexible UTF-16 filename."""
+
+        _fields_ = [
+            ("replace", wintypes.BOOLEAN),
+            ("root", wintypes.HANDLE),
+            ("length", wintypes.DWORD),
+            ("filename", wintypes.WCHAR * 1),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    set_info = kernel32.SetFileInformationByHandle
+    set_info.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    set_info.restype = wintypes.BOOL
+    invalid = ctypes.c_void_p(-1).value
+    handle = create_file(
+        str(source), 0x10000 | 0x80, 0x1 | 0x2 | 0x4, None,
+        3, 0x200000, None,  # DELETE|FILE_READ_ATTRIBUTES; OPEN_REPARSE_POINT
+    )
+    if handle in (None, invalid):
+        raise OSError(ctypes.get_last_error(), f"Cannot open staged file: {source}")
+    try:
+        utf16 = destination_name.encode("utf-16-le")
+        size = ctypes.sizeof(FileRenameInfo) + len(utf16) + 2
+        buffer = ctypes.create_string_buffer(size)
+        info = FileRenameInfo.from_buffer(buffer)
+        info.replace = True
+        info.root = destination_parent
+        info.length = len(utf16)
+        ctypes.memmove(ctypes.addressof(info) + FileRenameInfo.filename.offset,
+                       utf16, len(utf16))
+        if not set_info(handle, 3, buffer, size):  # FileRenameInfo = 3
+            raise OSError(ctypes.get_last_error(), "SetFileInformationByHandle failed")
+    finally:
+        close_handle(handle)
