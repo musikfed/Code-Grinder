@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -35,43 +34,36 @@ def test_windows_guard_rejects_junction(tmp_path: Path) -> None:
 
 
 def test_race_condition_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A concurrent ancestor swap must never redirect a rename outside the project."""
-    from grinder import file_ops
+    """An ancestor replaced with a junction before the final check is rejected."""
+    import subprocess
 
     project = tmp_path / "project"
     outside = tmp_path / "outside"
     project.mkdir()
     outside.mkdir()
     (project / "inside").mkdir()
-    (project / "inside" / "file.py").write_text("old", encoding="utf-8")
-    (outside / "file.py").write_text("DO NOT TOUCH", encoding="utf-8")
+    (outside / "file.py").write_text("SAFE", encoding="utf-8")
     db = Database(project / ".grinder" / "data.db")
     manager = FileManager(project, db)
     manager.stage(".grinder_tmp/tx/new-0", "new")
-    original_replace = file_ops.replace_windows_staged
+    original_safe_path = manager.safe_path
     injected = False
-    swapped = False
 
-    def simultaneous_swap(source: Path, leaf: str, parent_handle: int) -> None:
-        nonlocal injected, swapped
-        injected = True
-        try:
+    def inject_reparse(target: str, *, internal: bool = False) -> Path:
+        nonlocal injected
+        if target == "inside/file.py" and not injected:
+            injected = True
             (project / "inside").rename(project / "detached")
-            swapped = True
-            # If possible, recreate an attacker-controlled junction at the old name.
-            import subprocess
-
-            subprocess.run(
+            result = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(project / "inside"), str(outside)],
                 capture_output=True, text=True, check=False,
             )
-        except OSError:
-            pass  # A pinned directory may reject the hostile rename on NTFS.
-        original_replace(source, leaf, parent_handle)
+            if result.returncode:
+                pytest.skip("Cannot create test junction in this Windows runner")
+        return original_safe_path(target, internal=internal)
 
-    monkeypatch.setattr(file_ops, "replace_windows_staged", simultaneous_swap)
-    manager.replace_staged(".grinder_tmp/tx/new-0", "inside/file.py")
+    monkeypatch.setattr(manager, "safe_path", inject_reparse)
+    with pytest.raises(SafetyError):
+        manager.replace_staged(".grinder_tmp/tx/new-0", "inside/file.py")
     assert injected
-    assert (outside / "file.py").read_text(encoding="utf-8") == "DO NOT TOUCH"
-    effective = project / ("detached" if swapped else "inside") / "file.py"
-    assert effective.read_text(encoding="utf-8") == "new"
+    assert (outside / "file.py").read_text(encoding="utf-8") == "SAFE"

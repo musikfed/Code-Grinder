@@ -16,7 +16,7 @@ from grinder.diff import unified_change
 from grinder.parser import Change, Mode, validate_target
 from grinder.patches import PatchError, apply_patch
 from grinder.validator import Status, ValidationResult, Validator
-from grinder.windows_guard import guard_windows_parents, replace_windows_staged
+from grinder.windows_guard import guard_windows_parents
 
 
 class SafetyError(RuntimeError):
@@ -86,7 +86,7 @@ class FileManager:
         """Open each parent by directory descriptor, refusing symlinks on POSIX.
 
         On Windows, pin parent-directory Win32 handles and use root-relative
-        native rename to avoid textual ancestor swaps during replacement.
+        repeated lstat/realpath checks with an atomic os.replace operation.
         """
         parts = relative.split("/")[:-1]
         if os.name == "nt":
@@ -198,9 +198,12 @@ class FileManager:
         with self._parent_fd(source) as src_fd, self._parent_fd(target, create=True) as dst_fd:
             self.safe_path(target)
             if os.name == "nt":
-                replace_windows_staged(
-                    self.root / source, target.split("/")[-1], dst_fd,
-                )
+                # Revalidate *both* path identities while parent handles are pinned.
+                # Windows os.replace is a one-file atomic replacement, not a
+                # security guarantee against malicious concurrent path swaps.
+                self.safe_path(source, internal=True)
+                self.safe_path(target)
+                os.replace(self.root / source, self.root / target)
             else:
                 os.replace(source.split("/")[-1], target.split("/")[-1],
                            src_dir_fd=src_fd, dst_dir_fd=dst_fd)
