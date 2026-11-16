@@ -21,7 +21,10 @@ def test_invalid_python_returns_fail():
     assert result.status == Status.FAIL
 
 
-def test_unavailable_language_validation_is_skipped():
+def test_unavailable_language_validation_is_skipped(monkeypatch):
     """No compiler or adapter may be reported as a successful check."""
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
     result = Validator().validate(Path("main.go"), "package main")
     assert result.status == Status.SKIPPED

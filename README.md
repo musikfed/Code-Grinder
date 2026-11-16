@@ -1,18 +1,23 @@
 # Code Grinder (Мясорубка Кода) v2.2
 
-**Stage 1 — recoverable, reviewed code-change core.** Code Grinder turns output from small local AI models (Ollama / LM Studio / Qwen / Llama) into syntax-checked, versioned file changes. It is **model-agnostic**. This repository deliberately delivers the core first; the CLI, Web UI, hot-folder watcher, language adapters and Project Map are **subsequent stages**, not implemented yet.
+**Stage 2 — language adapters and offline project wizard, built on the Stage-1
+recoverable code-change core.** Code Grinder turns responses from small local AI
+models (Ollama / LM Studio / Qwen / Llama) into reviewed, versioned file changes.
+The CLI's `init` command is now implemented; web UI, process CLI, watcher and
+Project Map remain future milestones. No dependency installs or builds happen
+silently.
 
 ## Scope and security of Stage 1
 
 - Parse multiple explicitly marked TARGET/MODE fenced code blocks as one batch.
 - Modes: `CREATE`, `OVERWRITE`, `APPEND` (validate the combined file), and `PATCH` (unique exact SEARCH/REPLACE).
-- Reject absolute paths, traversal, reserved metadata paths and symlinked/junction paths. On POSIX, source and destination operations use directory descriptors and `O_NOFOLLOW` to avoid symlinked-ancestor races; on Windows the fallback rechecks paths and junctions but cannot guarantee resistance against a malicious concurrent reparse-point swap. **Do not run the Windows stage against a directory writable by adversarial users.**
+- Reject absolute paths, traversal, reserved metadata paths and symlinked/junction paths. On POSIX, parent-directory descriptors and `O_NOFOLLOW` protect from ancestor symlink races; on Windows parent handles are pinned via `CreateFileW` and file paths are rechecked immediately before `os.replace()`. This is not a complete hostile-user security boundary.
 - Preview a unified diff without writing. Actual writes require `approved=True`; if validation is `SKIPPED`, they additionally require `allow_skipped=True`. Overwriting an untracked file additionally requires `allow_untracked=True`.
 - Stage images in `.grinder_tmp/<transaction-id>/`, flush them, journal a `pending_transaction` in SQLite, then replace files one at a time. On caught errors, restore prior content. After process death, inspect pending state and explicitly choose rollback or completion.
 - Store full version snapshots and SHA-256 checksums in SQLite; detect external changes before a new operation. A rollback becomes another version. The database and journal live under `.grinder/` and are ignored by git.
-- Validate Python through non-executing `ast.parse`. Other languages return `SKIPPED` until their adapters are implemented in Stage 2. This is **syntax**, not semantic correctness, dependency validation or a security guarantee.
+- Validate Python through non-executing `ast.parse`. Other languages use Stage-2 adapters where a safe checker is available. Unavailable or deliberately unsafe validation returns `SKIPPED`, never `PASS`. Passing syntax checks is **not** a guarantee of safe code.
 
-**Limitations:** This protocol implements *recoverable, compensating* multi-file transactions, **not an atomic filesystem transaction across multiple paths**. Other processes can momentarily observe an intermediate state. Directory-creation rollback is best-effort; manual changes and unknown hashes are never silently overwritten. Stage 1 handles UTF-8 text files up to 16 MiB each. No user-generated code is executed automatically; generated JavaScript or build scripts are never run in Stage 1.
+**Limitations:** This protocol implements *recoverable, compensating* multi-file transactions, **not an atomic filesystem transaction across multiple paths**. Other processes can momentarily observe an intermediate state. Directory-creation rollback is best-effort; manual changes and unknown hashes are never silently overwritten. Stage 1 handles UTF-8 text files up to 16 MiB each. No user-generated application code is executed automatically; project build tools may execute user-provided scripts and require an explicit trusted workflow.
 
 ## Input protocol
 
@@ -84,10 +89,40 @@ else:
 
 `commit(...)` refuses to write without explicit approval. There is no web confirmation or `force_write` API route yet: those belong to Stage 4.
 
+## Поддерживаемые языки / Supported languages
+
+`python main.py init` starts the interactive wizard. For non-interactive setup:
+
+```bash
+python main.py init --name demo --language python --architecture Minimal --directory .
+python main.py init --name demo_go --language go --architecture Clean --directory .
+```
+
+The wizard refuses to overwrite non-empty project directories; it creates a
+language skeleton, optional MVC/Clean directories and saves settings in
+`.grinder/data.db`. It does not automatically download dependencies or run builds.
+Use the Python library's adapters with `allow_build=True` **only for trusted
+projects**. A missing toolchain is reported as `SKIPPED`.
+
+| Stack | Environment / manager | Default validation |
+| --- | --- | --- |
+| Python | uv, fallback venv/pip (explicit) | `ast.parse` (no execution) |
+| Node.js | bun → pnpm → npm | `node --check -` for JS; TS/JSX `SKIPPED` |
+| Go | go.mod, optional go mod tidy | `gofmt -e` parsing stdin |
+| Rust | Cargo.toml, optional cargo fetch | `rustfmt --emit stdout` syntax parser |
+| Java | Maven pom.xml | isolated `javac -proc:none` (no processors) |
+| C++ | CMakeLists.txt | `g++` / `clang++ -fsyntax-only` |
+| C# | SDK-style csproj | `SKIPPED` until trusted build path |
+| NoOp | plain text / Bash / SQL / HTML / CSS | `SKIPPED` |
+
+`rustc --emit=metadata`, `cargo check`, `dotnet build`, Maven and TypeScript
+project tooling may execute macros/plugins/build scripts; they are **not** run
+during default syntax validation. Shell execution is never used by adapters.
+
 ## Planned stages
 
-1. **Stage 1 (this commit):** safe core, SQLite snapshots, PATCH, syntax statuses, unified diff, crash recovery and tests.
-2. **Stage 2:** language environment adapters and project wizard.
+1. **Stage 1 (complete):** safe core, SQLite snapshots, PATCH, syntax statuses, unified diff, crash recovery and tests.
+2. **Stage 2 (this commit):** language adapters and offline project wizard.
 3. **Stage 3:** Project Map L1/L2/L3 and model-specific prompt builders.
 4. **Stage 4:** FastAPI web UI, preview/confirm dialogs, API and CLI.
 5. **Stage 5:** watchdog-based inbox processing and batch automation.
@@ -111,7 +146,8 @@ GitHub Actions runs `uv sync`, `uv run pytest -q`, and `uv run ruff check .`
 on Windows and Ubuntu. Do not treat local test success as confirmed CI success.
 
 Windows details: guarded operations pin ancestor directory handles using
-`CreateFileW` (without `FILE_SHARE_DELETE`), inspect `FILE_ATTRIBUTE_REPARSE_POINT`
-and verify handle paths with `GetFinalPathNameByHandleW`. This closes the common
-ancestor swap window. It is **not a complete guarantee against hostile concurrent
+`CreateFileW` (without `FILE_SHARE_DELETE`), inspect `FILE_ATTRIBUTE_REPARSE_POINT`,
+and verify handle paths with `GetFinalPathNameByHandleW`. Windows staged replacements
+use `os.replace()` after another no-reparse check. There is still a narrow
+TOCTOU window against a malicious concurrent actor. It is **not a complete guarantee against hostile concurrent
 leaf replacement** or misconfigured ACLs. Keep projects private to one user.

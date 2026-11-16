@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -26,20 +25,16 @@ class ValidationResult:
 
 
 class Validator:
-    """Stage-1 syntax validation: Python AST; other languages need later adapters."""
+    """Dispatch syntax checks through language adapters; no implicit build execution."""
+
+    def __init__(self, *, allow_build: bool = False) -> None:
+        """Keep potentially executable build/check phases disabled by default."""
+        self.allow_build = allow_build
 
     def validate(self, file_path: Path, content: str) -> ValidationResult:
-        """Check a proposed in-memory file without executing or importing it."""
-        suffix = file_path.suffix.lower()
-        if suffix != ".py":
-            return ValidationResult(
-                Status.SKIPPED,
-                f"Syntax checker not installed for {suffix or 'unknown language'}",
-            )
-        try:
-            ast.parse(content, filename=str(file_path))
-        except SyntaxError as exc:
-            return ValidationResult(Status.FAIL, f"{exc.msg} at line {exc.lineno}")
-        except Exception as exc:
-            return ValidationResult(Status.ERROR, f"Python AST validator failed: {exc}")
-        return ValidationResult(Status.PASS, "Python syntax OK (ast.parse; not executed)")
+        """Validate the proposed in-memory file through its registered adapter."""
+        from grinder.languages import adapter_for_file
+
+        return adapter_for_file(file_path, allow_build=self.allow_build).validate(
+            file_path, content,
+        )
