@@ -98,3 +98,20 @@ GitHub Actions runs `pytest` and `ruff` on Ubuntu and Windows. Passing Stage 1 u
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Offline testing
+
+When dependencies are **already installed**, run `python -m pytest` without
+network access. `uv run --offline pytest` works only if *all* required packages
+and a suitable Python interpreter are already available in the uv cache.
+There is no `[tool.uv] offline = true` project setting; use the `--offline`
+command-line flag or `UV_OFFLINE=1`.
+
+GitHub Actions runs `uv sync`, `uv run pytest -q`, and `uv run ruff check .`
+on Windows and Ubuntu. Do not treat local test success as confirmed CI success.
+
+Windows details: guarded operations pin ancestor directory handles using
+`CreateFileW` (without `FILE_SHARE_DELETE`), inspect `FILE_ATTRIBUTE_REPARSE_POINT`
+and verify handle paths with `GetFinalPathNameByHandleW`. This closes the common
+ancestor swap window. It is **not a complete guarantee against hostile concurrent
+leaf replacement** or misconfigured ACLs. Keep projects private to one user.

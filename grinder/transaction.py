@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 from filelock import FileLock
 
@@ -58,7 +59,7 @@ class TransactionManager:
             current = self.manager.prepare([entry.source for entry in prepared])
             if (len(current) != len(prepared) or any(
                 a.before_hash != b.before_hash or a.after != b.after
-                for a, b in zip(current, prepared)
+                for a, b in zip(current, prepared, strict=True)
             )):
                 raise SafetyError("Files changed after diff preview; review again")
             if any(p.validation.status == Status.SKIPPED for p in current) and not allow_skipped:

@@ -6,16 +6,17 @@ import hashlib
 import os
 import stat
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from grinder.database import Database
 from grinder.diff import unified_change
 from grinder.parser import Change, Mode, validate_target
 from grinder.patches import PatchError, apply_patch
 from grinder.validator import Status, ValidationResult, Validator
+from grinder.windows_guard import guard_windows_parents
 
 
 class SafetyError(RuntimeError):
@@ -89,14 +90,15 @@ class FileManager:
         """
         parts = relative.split("/")[:-1]
         if os.name == "nt":
-            path = self.root
-            for part in parts:
-                path /= part
-                if create and not path.exists():
-                    path.mkdir()
-                if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
-                    raise SafetyError("Directory junction/symlink detected")
-            yield None
+            # Keep real Win32 directory handles open (deny SHARE_DELETE) until
+            # the caller finishes reading, creating, replacing or removing.
+            path = self.root.joinpath(*relative.split("/"))
+            try:
+                with guard_windows_parents(self.root, path, create=create):
+                    self.safe_path(relative, internal=relative.startswith(".grinder_tmp/"))
+                    yield None
+            except (OSError, RuntimeError) as exc:
+                raise SafetyError(f"Windows path guard failed: {exc}") from exc
             return
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         fd = os.open(self.root, flags)
