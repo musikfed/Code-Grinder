@@ -151,3 +151,14 @@ and verify handle paths with `GetFinalPathNameByHandleW`. Windows staged replace
 use `os.replace()` after another no-reparse check. There is still a narrow
 TOCTOU window against a malicious concurrent actor. It is **not a complete guarantee against hostile concurrent
 leaf replacement** or misconfigured ACLs. Keep projects private to one user.
+
+
+## 🌐 Visual workflow & multilingual guides
+
+**Code Grinder v2.2 Stage 2** includes [illustrated flowcharts, recoverable transaction diagrams, adapter architecture and four web-UI *concept screenshots*](docs/SHOWCASE.md).
+
+Guides, protocol explanations, safety notes, and localized explanatory code comments are available in eight languages:
+
+[Русский](docs/i18n/ru.md) · [English](docs/i18n/en.md) · [한국어](docs/i18n/ko.md) · [简体中文](docs/i18n/zh.md) · [日本語](docs/i18n/ja.md) · [Français](docs/i18n/fr.md) · [Deutsch](docs/i18n/de.md) · [Беларуская](docs/i18n/be.md).
+
+**[Interactive Code Grinder project showcase](https://musikfed.github.io/view_my_prj/projects/Code-Grinder/)** — independent static page. The pictured web interface is a design mockup only. The FastAPI web server, browser approvals and processing API have **not yet been implemented**.
