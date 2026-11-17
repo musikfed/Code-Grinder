@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "id": "Code-Grinder",
+  "title": "Code-Grinder",
+  "version": "2.2.0",
+  "description": "Stage 2 — language adapters and offline project wizard, built on the Stage-1 recoverable code-change core. Code Grinder turns responses from small local AI models (Ollama / LM Studio / Qwen / Llama) into reviewed, versioned file changes. The CLI's init command is now implemented; web UI, process CLI, watcher and Project Map remain future milestones",
+  "subtitle": null,
+  "tags": [
+    "Python"
+  ],
+  "visibility": "public",
+  "publication": "publish_on_merge",
+  "public_private_approved": false,
+  "display_mode": "interface",
+  "status": "Черновик — ожидает проверки",
+  "repo_url": "https://github.com/musikfed/Code-Grinder",
+  "screenshots": [
+    "vitrine/screenshots/main.png",
+    "vitrine/screenshots/extra-1.png",
+    "vitrine/screenshots/extra-2.png"
+  ],
+  "cover": "vitrine/generated/cover.svg",
+  "cover_type": "schematic-not-screenshot",
+  "screenshot_source": "original-repository-file"
+}
